@@ -15,16 +15,23 @@ table{border-collapse:collapse;margin:10px 0;font-size:20px;width:100%;max-width
 th,td{padding:5px 8px;border-bottom:1px solid #555;text-align:center}th{font-size:15px;opacity:.9}
 tr.sum td{font-weight:bold;border-top:2px solid #aaa}
 .empty{opacity:.35}
+input,select{-webkit-user-select:text;user-select:text;border-radius:10px;border:0}
 </style></head><body><div id="screen"></div>
 <script>
 const TRIALS = 10, MIN_WAIT = 1500, MAX_WAIT = 4500, KEY = "lab10-reaction-v1";
+// Web app that files the numbers into the team's tab. Empty = sending is off and students use Copy.
+const ENDPOINT = "";
+const TEAMS = {
+  "Section 1": ["A Clowder","Big hero 6","EARNN","Gift's Bodyguards","Nina","The Mane Six"],
+  "Section 2": ["2/10","Big Five","Jack Frost (HEE HO)","Loading…","Ready for BrisBrain","the gatekeepers…","WARABIIII"]
+};
 const el = document.getElementById("screen");
-let data = load();            // {D:{times:[],early:0}, ND:{times:[],early:0}}
+let data = load();            // {D:{times:[],early:0}, ND:{times:[],early:0}, team:"", name:"", sent:""}
 let hand = "", state = "menu", t0 = 0, timer = null, saveOK = true;
 
-function blank(){return {D:{times:[],early:0},ND:{times:[],early:0}}}
+function blank(){return {D:{times:[],early:0},ND:{times:[],early:0},team:"",name:"",sent:""}}
 function load(){
-  try{const d=JSON.parse(localStorage.getItem(KEY));if(d&&d.D&&d.ND)return d}catch(e){}
+  try{const d=JSON.parse(localStorage.getItem(KEY));if(d&&d.D&&d.ND)return Object.assign(blank(),d)}catch(e){}
   return blank();
 }
 function save(){
@@ -42,10 +49,29 @@ function stats(a){
 function bg(c){document.body.style.background=c}
 function show(h){el.innerHTML=h}
 
+const esc = t => String(t).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function profile(){
+  state="profile"; bg("#222"); clearTimeout(timer);
+  const opts=Object.keys(TEAMS).map(sec=>`<optgroup label="${sec}">`+TEAMS[sec].map(t=>`<option ${t===data.team?"selected":""}>${esc(t)}</option>`).join("")+`</optgroup>`).join("");
+  show(`<h1>Who are you?</h1>
+  <p>Pick your team from the list. Do not type it.</p>
+  <select id="team" style="font-size:20px;padding:12px;margin:8px;max-width:300px"><option value="">Choose your team</option>${opts}</select>
+  <p>Your name (first name is fine)</p>
+  <input id="nm" maxlength="30" value="${esc(data.name)}" style="font-size:20px;padding:12px;margin:8px;width:260px;text-align:center" autocomplete="off">
+  <button onclick="saveProfile()">Continue</button>`);
+}
+function saveProfile(){
+  const t=document.getElementById("team").value, n=document.getElementById("nm").value.trim();
+  if(!t||!n){alert("Please choose your team and type your name.");return}
+  const changed=t!==data.team||n!==data.name;
+  data.team=t;data.name=n; if(changed)data.sent=""; save(); menu();
+}
 function menu(){
+  if(!data.team||!data.name) return profile();
   state="menu"; bg("#222"); clearTimeout(timer);
   const lab = h => full(h) ? `${name(h)} hand ✓ (redo)` : data[h].times.length ? `${name(h)} hand (continue, ${data[h].times.length}/${TRIALS})` : `${name(h)} hand`;
   show(`<h1>Reaction time</h1>
+  <p class="small">${esc(data.name)} · ${esc(data.team)} · <a href="#" onclick="profile();return false" style="color:#9cf">change</a></p>
   <p>Rest your phone flat and use <b>one finger</b> of the hand you choose.</p>
   <p>The screen goes <b style="color:#ff6b6b">RED</b>, then <b style="color:#5cff7a">GREEN</b>. Tap as fast as you can when it turns green. Do not tap early.</p>
   <p>10 taps per hand. Your results save on this phone.</p>
@@ -70,7 +96,7 @@ function tooEarly(){
 }
 function hit(){
   const rt=Math.round(performance.now()-t0); data[hand].times.push(rt); save();
-  if(full(hand)) return results(true);
+  if(full(hand)){ if(full("D")&&full("ND")&&ENDPOINT) send(); return results(true); }
   state="shown"; bg("#2c3e50");
   show(`<p>Trial ${data[hand].times.length} of ${TRIALS}</p><div class="big">${rt} ms</div><p class="small">Tap for the next one</p>`);
 }
@@ -81,17 +107,30 @@ function results(justDone){
   for(let i=0;i<TRIALS;i++)
     rows+=`<tr><td>${i+1}</td><td class="${D.times[i]==null?'empty':''}">${D.times[i]??"-"}</td><td class="${ND.times[i]==null?'empty':''}">${ND.times[i]??"-"}</td></tr>`;
   const both=full("D")&&full("ND");
-  const todo=!full("D")?"Dominant hand still to do.":!full("ND")?"Non-dominant hand still to do.":"Both hands done. Keep this screen and copy these numbers into your team's Google Sheet.";
+  const todo=!full("D")?"Dominant hand still to do.":!full("ND")?"Non-dominant hand still to do.":(ENDPOINT?"Both hands done.":"Both hands done. Keep this screen and copy these numbers into your team's Google Sheet.");
   show(`<h1>My data (ms)</h1>
   <table><tr><th>#</th><th>Dominant</th><th>Non-dominant</th></tr>${rows}
   <tr class="sum"><td>Mean</td><td>${sD.m}</td><td>${sN.m}</td></tr>
   <tr><td>SD</td><td>${sD.sd}</td><td>${sN.sd}</td></tr>
   <tr><td>Early</td><td>${D.early}</td><td>${ND.early}</td></tr></table>
-  <p>${todo}</p>
+  <p>${todo}</p>${sendNote()}
   ${saveOK?`<p class="small">Saved on this phone. If you close this page by accident, scan the QR code again on the same phone and your numbers are still here.</p>`:`<p class="small" style="color:#ffb3b3"><b>This browser cannot save.</b> Take a screenshot of this screen now.</p>`}
   <button onclick="menu()">${both?"Back":"Continue"}</button>
   <button class="sec" onclick="copyData()">Copy numbers (for pasting into Sheets)</button>
   <button class="sec" onclick="wipe()">Erase everything and start over</button>`);
+}
+function payload(){return JSON.stringify({v:1,team:data.team,name:data.name,D:data.D.times,ND:data.ND.times,earlyD:data.D.early,earlyND:data.ND.early})}
+function send(){
+  if(!ENDPOINT) return;
+  data.sent="sending"; save();
+  fetch(ENDPOINT,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body:payload()})
+    .then(()=>{data.sent="sent";save();if(state==="results")results()})
+    .catch(()=>{data.sent="failed";save();if(state==="results")results()});
+}
+function sendNote(){
+  if(!ENDPOINT||!(full("D")&&full("ND"))) return "";
+  const m={sending:"Sending to your team's sheet…",sent:`Sent to <b>${esc(data.team)}</b>. Open the team sheet and check that <b>${esc(data.name)}</b> is there.`,failed:"Could not send. Check your connection and press Send again, or use Copy numbers.","":""}[data.sent]||"";
+  return `<p class="small">${m}</p><button class="sec" onclick="send()">Send again</button>`;
 }
 function copyData(){
   let t="#\tDominant\tNon-dominant\n";
@@ -101,7 +140,7 @@ function copyData(){
   (navigator.clipboard&&navigator.clipboard.writeText)?navigator.clipboard.writeText(t).then(ok,fb):fb();
 }
 function wipe(){
-  if(confirm("Erase ALL your numbers on this phone? This cannot be undone.")&&confirm("Really erase everything?")){data=blank();save();menu()}
+  if(confirm("Erase ALL your numbers on this phone? This cannot be undone.")&&confirm("Really erase everything?")){const t=data.team,n=data.name;data=blank();data.team=t;data.name=n;save();menu()}
 }
 function press(e){
   if(e.target.closest("button")) return;
